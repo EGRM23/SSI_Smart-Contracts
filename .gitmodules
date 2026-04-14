@@ -1,0 +1,9 @@
+[submodule "BESU_project"]
+	path = BESU_project
+	url = https://github.com/PaulParizacaMozo/BESU_project.git
+[submodule "SSI_App"]
+	path = SSI_App
+	url = https://github.com/VictorQuicano/SSI_App.git
+[submodule "SSI_Project"]
+	path = SSI_Project
+	url = https://github.com/VictorQuicano/SSI_Project.git
