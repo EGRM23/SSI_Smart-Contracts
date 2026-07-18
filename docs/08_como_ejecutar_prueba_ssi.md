@@ -145,6 +145,87 @@ Misma mecánica que la sección 2.
 
 ---
 
+## Bridge SSI → Besu (flujo completo extremo a extremo)
+
+Una vez que `test_all.py` termina con ✅ en los 4 agentes, ejecuta el bridge para
+registrar las entidades en los contratos Besu y realizar un viaje completo.
+
+### Terminal 4 — Red Besu
+
+```bash
+cd ~/Documentos/TI3/BESU_project
+./run.sh                   # levanta la red (puede tardar ~1 min)
+```
+
+Verifica que el RPC responde:
+
+```bash
+curl -s -X POST http://localhost:8545 \
+  -H "Content-Type: application/json" \
+  --data '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}'
+```
+
+### Deploy de contratos
+
+```bash
+cd ~/Documentos/TI3/BESU_project/smart_contracts
+npm install        # solo la primera vez
+npm run compile    # compilar .sol → .json
+node scripts/deploy_system.js   # despliega y escribe deployed_addresses.json
+```
+
+### Ejecutar el bridge
+
+```bash
+cd ~/Documentos/TI3/SSI_App
+source venv/bin/activate
+python bridge/bridge.py
+```
+
+El bridge hace 3 fases:
+
+1. **Fase 1** — Lee las credenciales almacenadas en los wallets ACA-Py (user1, evtol1, vertiport1, vertiport2)
+2. **Fase 2** — Registra las entidades en Besu:
+   - `UserVerification.setRiderPermission(rider, can_ride)` — autoriza al usuario
+   - `VertiportManagement.registerVertiport(...)` — registra los 2 vertiports con su capacidad real
+   - `EVTOLManagement.registerEVTOL(...)` — registra el eVTOL en su vertiport de origen
+3. **Fase 3** — Ejecuta un viaje completo vía `FlightReservation`:
+   - `createReservation(...)` → estado CONFIRMED
+   - `startTrip(...)` → estado IN_PROGRESS
+   - `completeTrip(...)` → estado COMPLETED
+
+Salida esperada:
+```
+  FASE 1 — Leyendo credenciales de los agentes ACA-Py
+  ✅ user1: can_ride=true
+  ✅ evtol1: id_puerto=p1, name=Eagle-XXXXXX
+  ✅ vertiport1: id=vp1-XXXX, capacity=10
+  ✅ vertiport2: id=vp2-XXXX, capacity=8
+
+  FASE 2 — Registrando entidades en Besu
+  ✅ Usuario autorizado (can_ride=True)
+  ✅ Vertiport1 registrado (vp1-XXXX)
+  ✅ Vertiport2 registrado (vp2-XXXX)
+  ✅ eVTOL registrado (id=1)
+  ✅ Parking pre-ocupado en p1
+
+  FASE 3 — Ejecutando viaje vía FlightReservation
+  ✅ Reserva creada — status=1 (CONFIRMED)
+  ✅ Viaje iniciado — status=2 (IN_PROGRESS)
+  ✅ Viaje completado — status=3 (COMPLETED)
+
+  RESULTADO
+  Trip ID  : TRIP-BRIDGE-XXXXXXXX
+  Estado   : COMPLETED ✅
+```
+
+> **Nota:** el bridge usa los atributos reales de las credenciales SSI como `bytes` en los
+> contratos (`userCredential`, `evtolCredential`, `vertiportCredential`). La verificación
+> on-chain sigue mockeada (`return true`), pero los bytes ya contienen datos reales —
+> cuando se implemente la verificación real en Solidity, el bridge no cambia.
+
+---
+
 ## Pruebas individuales por tipo de credencial
 
 Si quieres emitir solo un tipo específico sin pasar por Django:
