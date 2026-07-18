@@ -1,6 +1,6 @@
 [submodule "BESU_project"]
 	path = BESU_project
-	url = https://github.com/PaulParizacaMozo/BESU_project.git
+	url = https://github.com/EGRM23/SSI_BESU.git
 [submodule "SSI_App"]
 	path = SSI_App
 	url = https://github.com/VictorQuicano/SSI_App.git
