@@ -182,13 +182,17 @@ source venv/bin/activate
 python bridge/bridge.py
 ```
 
+> **Requisito:** Django (Terminal 3) debe estar corriendo cuando se ejecuta el bridge.
+> El bridge llama a `POST /api/attest/` para obtener las firmas criptográficas antes
+> de cada registro en Besu.
+
 El bridge hace 3 fases:
 
 1. **Fase 1** — Lee las credenciales almacenadas en los wallets ACA-Py (user1, evtol1, vertiport1, vertiport2)
-2. **Fase 2** — Registra las entidades en Besu:
-   - `UserVerification.setRiderPermission(rider, can_ride)` — autoriza al usuario
-   - `VertiportManagement.registerVertiport(...)` — registra los 2 vertiports con su capacidad real
-   - `EVTOLManagement.registerEVTOL(...)` — registra el eVTOL en su vertiport de origen
+2. **Fase 2** — Para cada entidad: pide a Django una **atestación firmada** (EIP-191 / secp256k1), luego registra en Besu. El contrato verifica la firma con `ecrecover()` antes de aceptar el registro:
+   - `POST /api/attest/user/` → `UserVerification.setRiderPermission(rider, can_ride, sig)`
+   - `POST /api/attest/vertiport/` × 2 → `VertiportManagement.registerVertiport(..., sig)`
+   - `POST /api/attest/evtol/` → `EVTOLManagement.registerEVTOL(..., sig)`
 3. **Fase 3** — Ejecuta un viaje completo vía `FlightReservation`:
    - `createReservation(...)` → estado CONFIRMED
    - `startTrip(...)` → estado IN_PROGRESS
@@ -203,11 +207,16 @@ Salida esperada:
   ✅ vertiport2: id=vp2-XXXX, capacity=8
 
   FASE 2 — Registrando entidades en Besu
+  [2a] Solicitando atestación de usuario a Django...
+  [2a] setRiderPermission(0xFE3B...., True) + atestación
   ✅ Usuario autorizado (can_ride=True)
+  [2b] Solicitando atestación de vertiport a Django...
   ✅ Vertiport1 registrado (vp1-XXXX)
+  [2c] Solicitando atestación de vertiport a Django...
   ✅ Vertiport2 registrado (vp2-XXXX)
+  [2d] Solicitando atestación de eVTOL a Django...
   ✅ eVTOL registrado (id=1)
-  ✅ Parking pre-ocupado en p1
+  ✅ Parking pre-ocupado en vp1-XXXX
 
   FASE 3 — Ejecutando viaje vía FlightReservation
   ✅ Reserva creada — status=1 (CONFIRMED)
@@ -219,10 +228,11 @@ Salida esperada:
   Estado   : COMPLETED ✅
 ```
 
-> **Nota:** el bridge usa los atributos reales de las credenciales SSI como `bytes` en los
-> contratos (`userCredential`, `evtolCredential`, `vertiportCredential`). La verificación
-> on-chain sigue mockeada (`return true`), pero los bytes ya contienen datos reales —
-> cuando se implemente la verificación real en Solidity, el bridge no cambia.
+> **Verificación criptográfica (Opción A — Trusted Verifier):** los contratos usan
+> `ecrecover()` para comprobar que cada registro viene respaldado por una firma real
+> de Django. Si la firma es inválida o falta, la transacción revierte. Para la hoja de
+> ruta hacia verificación completamente descentralizada (ZK-SNARK o BBS+), ver
+> `docs/10_verificacion_criptografica.md`.
 
 ---
 
