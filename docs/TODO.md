@@ -82,6 +82,22 @@ hacer que `smoke_test_full_system.js` lo lea en lugar de usar addresses hardcode
 
 ## Documentación / Testing
 
+### 8. Pruebas de seguridad — contratos Besu
+**Estado:** ✅ Ejecutado. Los 4 tests pasan.
+
+| Test | Ataque intentado | Resultado |
+|------|-----------------|-----------|
+| 4.1 | `registerVertiport` con firma vacía (`b""`) | ✅ revert — ecrecover rechaza 0 bytes |
+| 4.2 | `registerVertiport` con firma basura (65 bytes `0xabab…`) | ✅ revert — dirección recuperada ≠ trustedVerifier |
+| 4.3 | `createReservation` dos veces con el mismo eVTOL | ✅ revert — `isAvailable()` = false (state machine) |
+| 4.4 | `createReservation` con rider no autorizado (`0x0000…0001`) | ✅ revert — `canUserRide()` = false |
+
+**Nota:** Los contratos implementan `ecrecover` real (no mock). El comentario en CLAUDE.md
+("verificación mockeada") corresponde a una versión anterior reemplazada en la Opción A
+del Trusted Verifier (doc 10).
+
+---
+
 ### 6. Escenario 3: pruebas de escalabilidad de reservas Besu
 **Estado:** ✅ Ejecutado. Resultados en `SSI_App/load_tests/resultados/besu_*.html`
 y gráficos `grafico_07/08/09_besu_*.png`.
