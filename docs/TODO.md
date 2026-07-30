@@ -100,3 +100,27 @@ queda bloqueado detrás de N-1 txs fallidas por bloque.
 
 **Solución para producción:** Flota de múltiples EVTOLs (1 por par de vertiports) o
 mecanismo de cola on-chain para serializar las reservas correctamente.
+
+---
+
+### 7. Pruebas de tolerancia a fallos
+**Estado:** ✅ Ejecutado. Cuatro escenarios validados.
+
+#### 7.1 Besu QBFT — caída de nodos validator
+- **1/4 caído (3/4 activos):** consenso continúa, throughput sin cambio (0.20 blq/s), latencia 4–9 s.
+- **2/4 caídos (quórum roto):** bloque congelado, txs aceptadas en mempool pero nunca minadas.
+- **Recovery:** ~5 min para re-sync QBFT; la tx pendiente se incluye en el primer bloque nuevo.
+
+#### 7.2 Indy Plenum — caída de nodos ledger
+- **1/4 caído (3/4):** emisión de credenciales sin degradación (~2 s).
+- **2/4 caídos (quórum roto):** re-emisión de cred_def cacheada **continúa** (ACA-Py cachea en wallet local); creación de schema **nuevo** falla con timeout (requiere write al ledger).
+- **Recovery:** inmediato al restaurar nodos.
+
+#### 7.3 ACA-Py issuer — crash durante emisión
+- Fallo limpio con `ConnectionRefused` en :8031. Ningun estado inconsistente en Besu.
+- Recovery inmediato con `docker start acapy-issuer`.
+
+#### 7.4 Django — caída durante bridge
+- Bridge falla en Fase 2a (`/api/attest/user/`) con `ConnectionRefused` en :8000.
+- Besu no recibe ninguna tx → estado on-chain consistente.
+- Recovery: reiniciar Django + re-ejecutar bridge (operaciones register son idempotentes).
