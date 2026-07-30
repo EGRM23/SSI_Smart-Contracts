@@ -83,8 +83,20 @@ hacer que `smoke_test_full_system.js` lo lea en lugar de usar addresses hardcode
 ## Documentación / Testing
 
 ### 6. Escenario 3: pruebas de escalabilidad de reservas Besu
-**Estado:** No ejecutado aún. El locustfile ya está definido en
-`docs/11_pruebas_del_sistema.md` (Escenario 3).
+**Estado:** ✅ Ejecutado. Resultados en `SSI_App/load_tests/resultados/besu_*.html`
+y gráficos `grafico_07/08/09_besu_*.png`.
 
-**Descripción:** N usuarios haciendo reservas de vuelo concurrentes vía `bridge.py`
-→ `FlightReservation` en Besu. Mide throughput de transacciones on-chain.
+**Hallazgo:** El contrato `FlightReservation` sólo permite un viaje a la vez (state machine
+del EVTOL: PARKED → EXPECTING → IN_USE → PARKED). Con N usuarios concurrentes compartiendo
+una sola cuenta Besu (nonce centralizado) y un solo EVTOL:
+- **1u**: 6 viajes completos/90 s, 0% fallos, ~5 s latencia (tiempo de bloque QBFT)
+- **3u**: 1 viaje/90 s, **88% fallos** (txs revertan on-chain por EVTOL EXPECTING)
+- **5u**: 1 viaje/90 s, **96% fallos** (misma causa)
+- **10u**: 0 viajes/90 s, **~100% fallos** (Besu rechaza con "nonce too distant", ~42 ms)
+
+**Causa raíz:** Los N usuarios generan N nonces por ciclo pero el EVTOL solo acepta 1
+createReservation por vez → N-1 txs consumen nonces inútilmente → el nonce de startTrip
+queda bloqueado detrás de N-1 txs fallidas por bloque.
+
+**Solución para producción:** Flota de múltiples EVTOLs (1 por par de vertiports) o
+mecanismo de cola on-chain para serializar las reservas correctamente.
