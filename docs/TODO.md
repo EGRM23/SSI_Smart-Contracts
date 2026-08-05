@@ -7,7 +7,7 @@ Ordenados por área y prioridad aproximada.
 
 ## Escalabilidad de ACA-Py
 
-### 1. Migrar ACA-Py de SQLite a PostgreSQL
+### 1. Migrar ACA-Py de SQLite a PostgreSQL (HECHO)
 **Problema identificado:** El agente ACA-Py usa SQLite como backend de wallet. Con ≥15 usuarios
 concurrentes emitiendo credenciales, el SQLite interno de ACA-Py se bloquea (`database is locked`)
 y el sistema colapsa (96% de fallos a 25 usuarios). Tras el colapso, ACA-Py no se recupera solo —
@@ -24,22 +24,74 @@ environment:
   - ACAPY_WALLET_STORAGE_CONFIG={"url":"postgres:5432"}
 ```
 
-### 2. Un agente ACA-Py por usuario (arquitectura multiagente)
-**Problema identificado:** Todos los usuarios comparten el mismo agente `acapy-user1`.
-Las solicitudes concurrentes de conexión OOB y emisión de credenciales se serializan en ese
-único agente, creando un cuello de botella estructural.
+### 2. Migrar ACA-Py a arquitectura multitenant (HECHO)
+**Problema identificado:** El sistema actual levanta 5 contenedores Docker separados
+(issuer, user1, evtol1, vertiport1, vertiport2), uno por entidad. Todos los usuarios
+comparten el mismo agente `acapy-user1`, serializando sus operaciones de wallet en un
+único proceso asyncio. Esto es el cuello de botella visible en el Escenario 1 (plateau
+a ~30 r/s) y en el Escenario 2 (RPS se aplana en ~24 a partir de 30 usuarios).
 
-**Solución:** Crear un agente ACA-Py dedicado por usuario al momento del registro
-(`POST /api/user/`). El `WalletService` de Django levantaría un contenedor dinámicamente
-o usaría un pool de agentes pre-creados. Esto es el diseño correcto para producción.
+**Solución correcta para producción — Multitenant:**
+Un único proceso ACA-Py con `--multitenant` activo gestiona N wallets aisladas
+dentro del mismo contenedor. Cada wallet es como una "cuenta" independiente:
+claves separadas, DID separado, historial separado. El servidor expone un JWT
+por wallet para que cada operación se dirija al wallet correcto.
 
-**Complejidad:** Alta — requiere orquestación dinámica de contenedores (Kubernetes o Docker API).
+```
+Arquitectura actual:          Arquitectura multitenant:
+[acapy-issuer]                [acapy-server] ← único contenedor
+[acapy-user1]      →              wallet: issuer
+[acapy-evtol1]                    wallet: user-{uuid}  (uno por usuario)
+[acapy-vertiport1]                wallet: evtol-{id}
+[acapy-vertiport2]                wallet: vertiport-{id}
+```
+
+**Cambios requeridos:**
+- Agregar `--multitenant --multitenant-admin` al comando de ACA-Py en docker-compose
+- Reemplazar `WalletService.create_wallet()` para que llame a `POST /multitenancy/wallet`
+  en lugar de apuntar a un agente fijo
+- Guardar el `token` JWT devuelto por ACA-Py en el modelo `Wallet` de Django
+- Pasar el JWT en el header `Authorization: Bearer <token>` en cada operación por wallet
+
+**Impacto medido:** Eliminaría el cuello de botella de serialización. El plateau de
+~30 r/s en registro y ~24 r/s en emisión desaparecería (límite pasaría a ser CPU/Indy).
+
+**Complejidad:** Media — cambios en docker-compose, WalletService y modelo Wallet.
 
 ---
 
 ## Bridge SSI → Besu
 
-### 3. Verificación de firmas en el bridge (ecrecover on-chain)
+### 3a. Implementar flujo de verificación de credenciales en ACA-Py (Hueco A del bridge)
+**Problema:** El cliente ACA-Py en Django (`auth_app/aca_py/client.py`) sólo implementa
+emisión de credenciales. No existe ningún método para solicitar ni verificar una presentación.
+Los métodos faltantes son parte del protocolo RFC 0037 (Present Proof):
+- `send_proof_request(connection_id, proof_request)` — pide al holder que presente su credencial
+- `get_proof_record(presentation_exchange_id)` — consulta si la verificación pasó
+
+**Impacto:** Sin esto no hay manera de saber si un usuario tiene credencial válida antes de
+autorizar una reserva. El sistema nunca usa las credenciales que emite.
+
+**Dependencia:** Bloqueante para el Hueco B (no hay qué verificar sin este paso).
+
+---
+
+### 3b. Implementar llamada Django → Besu tras verificación (Hueco B del bridge)
+**Problema:** No existe código Python que llame a los contratos Besu. Actualmente
+`setRiderPermission(address, true)` se ejecuta manualmente en `smoke_test_full_system.js`
+en JavaScript, saltándose por completo la verificación SSI.
+
+**Trabajo pendiente:**
+- Instalar `web3.py` en SSI_App
+- Crear un servicio `BesuBridgeService` en Django que, tras verificar la credencial en ACA-Py,
+  llame a `UserVerification.setRiderPermission(address, true)` en Besu
+- El flujo completo: `POST /api/attest/user/` → ACA-Py verifica → web3.py llama Besu
+
+**Dependencia:** Requiere Hueco A implementado.
+
+---
+
+### 3c. Verificación de firmas en el bridge (ecrecover on-chain)
 **Estado actual:** Los contratos Solidity aceptan parámetros de credenciales SSI pero la
 verificación está mockeada (`return true` en `UserVerification`, `EVTOLManagement`, etc.).
 
@@ -58,7 +110,7 @@ sin esto, cualquiera podría llamar a los contratos con credenciales falsas.
 
 ## Django / Base de datos
 
-### 4. Migrar Django de SQLite a PostgreSQL
+### 4. Migrar Django de SQLite a PostgreSQL (HECHO)
 **Problema identificado:** SQLite bloquea escrituras concurrentes en Django. El Escenario 1
 de escalabilidad mostró primera degradación a 75 usuarios simultáneos registrándose
 (1.6% de fallos) y colapso a 200 usuarios (47.9% de fallos).
