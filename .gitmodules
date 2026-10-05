@@ -7,3 +7,6 @@
 [submodule "SSI_Project"]
 	path = SSI_Project
 	url = https://github.com/VictorQuicano/SSI_Project.git
+[submodule "indy-besu"]
+	path = indy-besu
+	url = https://github.com/EGRM23/indy-besu-uam.git
