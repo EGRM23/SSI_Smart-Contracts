@@ -154,12 +154,10 @@ Presentación original  -> verify(...) = True
 Presentación alterada  -> verify(...) = False
 ```
 
-Este control valida el mecanismo que se medirá en B4. Para completar B4 según
-el protocolo, se debe convertirlo en un harness que tome 30 presentaciones
-independientes, altere una copia de cada una y guarde por repetición el tiempo
-de verificación y el resultado. No debe inyectarse la prueba alterada mediante
-la API Admin de ACA-Py: dicha API genera y entrega la presentación como una
-sola operación y no expone un endpoint para enviar el artefacto ya manipulado.
+Este control se convirtió en el harness B4 ejecutado con 30 presentaciones
+independientes. No se inyectó la prueba alterada mediante la API Admin de
+ACA-Py: esa API genera y entrega la presentación como una sola operación y no
+expone un endpoint para enviar el artefacto ya manipulado.
 
 ## Configuración revocable para B7 y B8
 
@@ -299,3 +297,123 @@ python3 run_case_b_revocation.py --case B7 --role revocar --runs 30
 
 El programa crea una nueva carpeta fechada por ejecución y no sobrescribe los
 resultados existentes.
+
+## Mediciones complementarias de selección
+
+Se repitieron B5 y B6 para medir la latencia de selección de credenciales en
+el holder. Esta latencia termina cuando ACA-Py devuelve la lista de credenciales
+candidatas; en ambos casos la lista no contiene una credencial compatible.
+
+| Caso | Repeticiones | Resultado | Selección p50 |
+|---|---:|---|---:|
+| B5 | 30 | Credential definition incompatible; rechazo antes de generar prueba | 5.249 ms |
+| B6 | 30 | Schema incompatible; rechazo antes de generar prueba | 5.195 ms |
+
+Estos resultados no son fallos de la criptografía CL. Prueban que las
+restricciones de la solicitud impiden al holder construir una presentación con
+una credencial que no corresponde al issuer o al modelo de atributos esperado.
+Los datos están en
+[`20261005T132049Z`](../SSI_App/agents/case_b/results/20261005T132049Z).
+
+## Integración de presentaciones AnonCreds en Besu
+
+La evaluación off-chain demuestra que ACA-Py puede generar y verificar pruebas
+CL. La pregunta adicional es cuánto cuesta trasladar esas pruebas reales a
+Besu. Para aislar esa pregunta se desplegó el contrato
+[`AnonCredsPayloadBenchmark.sol`](../../BESU_project/smart_contracts/contracts/AnonCredsPayloadBenchmark.sol).
+
+El contrato recibe el payload como `bytes`, calcula `keccak256`, registra un
+evento con el hash, hashes de schema y credential definition, tamaño y marca de
+tiempo. **No verifica la prueba CL ni autoriza una reserva.** Por tanto, estos
+datos miden gas de calldata, hash, evento e inclusión de transacción; son un
+límite inferior de transporte, no el gas de verificación CL on-chain.
+
+Se enviaron 30 transacciones con JSON serializado de una presentación real B1
+y 30 con JSON serializado de una presentación real B8. B1 no incluye prueba de
+no revocación; B8 sí la incluye.
+
+Se ejecutó antes un benchmark exploratorio con buffers sintéticos de la misma
+longitud. No se usa para el análisis final: fue sustituido por estas
+transacciones con bytes serializados de presentaciones reales, cuya distribución
+de bytes representa mejor el gas de calldata.
+
+| Payload real | Repeticiones | Tamaño | Gas p50 | Latencia p50 |
+|---|---:|---:|---:|---:|
+| B1 | 30 | 4,888 bytes | 106,594 | 1,020 ms |
+| B8 | 30 | 10,896 bytes | 205,195 | 1,018 ms |
+
+La prueba B8 es aproximadamente 2.23 veces mayor y su transporte consume
+aproximadamente 1.92 veces el gas de B1. Esto muestra que la no revocación
+incrementa de forma material el costo de mover la evidencia hacia Besu, aun sin
+ejecutar la verificación CL.
+
+Los resultados están en
+[`anoncreds_real_payloads.json`](../../BESU_project/smart_contracts/results/anoncreds_real_payloads.json)
+y el ejecutor es
+[`benchmark_anoncreds_real_payloads.js`](../../BESU_project/smart_contracts/scripts/benchmark_anoncreds_real_payloads.js).
+
+### Interpretación para el paper
+
+La integración directa CL on-chain requeriría que Solidity verificara la prueba
+primaria CL, las restricciones, nonce, credential definition y, para B7/B8, el
+acumulador de revocación. El benchmark no implementa esas operaciones. Por ello
+el paper debe reportar separadamente: resultados de AnonCreds off-chain,
+transporte real hacia Besu y evidencia bibliográfica sobre el costo y viabilidad
+de un verificador CL completo en EVM.
+
+## Interpretación de resultados del experimento B
+
+El experimento B separa cuatro propiedades que el flujo actual con Trusted
+Verifier no demuestra por sí mismo: autenticidad criptográfica de la
+credencial, divulgación selectiva, vínculo de la solicitud con objetos SSI
+concretos y vigencia por revocación.
+
+| Resultado | Qué significa | Relación con la autorización de reserva |
+|---|---|---|
+| B1: 30/30 válidas con `can_ride=true` | El holder construyó una prueba CL verificable contra la credential definition del issuer. | Hay evidencia criptográfica suficiente para autorizar, antes de aplicar la lógica de reserva. |
+| B2: prueba válida, política rechazada | La firma y prueba pueden ser correctas aunque el atributo no cumpla la regla. | Verificación de credencial y decisión de negocio son etapas distintas; `can_ride=false` debe negar la reserva. |
+| B3: otros atributos ocultos | Solo se reveló `can_ride`; identidad y fecha de nacimiento no se enviaron al verifier. | Reduce exposición de datos del pasajero frente a un flujo que transmite toda la credencial. |
+| B4: 30/30 alteradas rechazadas | Cambiar `a_prime` invalida la relación matemática de la prueba CL. | Un intermediario o atacante no puede modificar la evidencia presentada y mantener una autorización válida. |
+| B5: cred def incompatible | El holder no encontró una credencial emitida bajo la definición pedida. | La solicitud queda ligada a la autoridad emisora y configuración criptográfica esperadas. |
+| B6: schema incompatible | El holder no encontró una credencial que correspondiera al modelo de atributos solicitado. | Evita interpretar como permiso de vuelo una credencial de otro tipo. |
+| B7: 30/30 revocadas rechazadas | La prueba de no revocación no fue válida frente al estado publicado después de revocar. | Una autorización previamente emitida deja de servir cuando el issuer la revoca. |
+| B8: 30/30 vigentes válidas | La credencial vigente pudo demostrar no revocación con tails file y estado de registry. | La reserva puede aceptar evidencia actual sin revelar atributos adicionales. |
+
+### Rendimiento off-chain
+
+Las presentaciones sin revocación B1--B3 tuvieron medianas de generación entre
+30.465 y 31.679 ms y de verificación entre 27.315 y 27.950 ms. B8, que incluye
+no revocación, aumentó esas medianas a 97.057 ms y 75.878 ms respectivamente.
+La diferencia se explica por la prueba adicional de acumulador, la consulta de
+estado de revocación y el uso del tails file. La revocación aporta control de
+vigencia, pero tiene un costo observable de tiempo y tamaño.
+
+La prueba B8 tuvo una mediana de 10,876.5 bytes, frente a aproximadamente
+4,880 bytes en B1--B3. Por ello, la decisión de usar revocación debe tratarse
+como un requisito de seguridad y ciclo de vida de credenciales, no como una
+propiedad gratuita.
+
+### Rendimiento y significado on-chain
+
+El benchmark Besu muestra que una presentación real puede enviarse a un
+contrato y quedar identificada por su hash. B1 consumió 106,594 gas y B8
+205,195 gas en mediana. El aumento sigue la diferencia de tamaño de los
+payloads y no mide la matemática CL.
+
+Estos valores permiten estimar el costo de comunicación de una arquitectura
+donde una prueba llegue a Besu. No prueban que Besu pueda verificarla: falta
+implementar en Solidity la verificación primaria CL y, para revocación, el
+acumulador y estado de registry. Por eso no es válido comparar directamente
+estos valores con el gas de `ecrecover` como si ambos verificaran la misma
+evidencia.
+
+### Conclusión de la alternativa B
+
+AnonCreds CL/ZK resuelve la falta de verificación criptográfica del flujo
+actual antes de Besu y limita los datos revelados. Sin embargo, mientras
+ACA-Py verifique la prueba y otro componente comunique la decisión al contrato,
+el Trusted Verifier no desaparece completamente de la integración con Besu.
+Una verificación CL directa on-chain podría eliminar esa dependencia para la
+validez criptográfica, pero requiere un verificador EVM que todavía no forma
+parte del proyecto. El experimento demuestra la viabilidad del tramo SSI y
+cuantifica el costo de transporte que ese verificador tendría que asumir.
